@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YTS AI Player</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="logo" id="logo" style="cursor:pointer">YTS<span>AI</span></div>
+    <div class="search-bar">
+      <input
+        id="prompt"
+        type="text"
+        placeholder="What are you in the mood for? (e.g. 80s sci-fi, slow burn thriller, Kubrick vibes)"
+        autocomplete="off"
+      />
+      <button id="suggest-btn">Suggest</button>
+    </div>
+    <div class="movie-search">
+      <input
+        id="movie-search-input"
+        type="text"
+        placeholder="Search a movie…"
+        autocomplete="off"
+      />
+      <div id="movie-search-dropdown" class="movie-search-dropdown hidden"></div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="browse">Browse</button>
+    <button class="tab" data-tab="watchlater">Watch Later</button>
+    <button class="tab" data-tab="downloads">Downloads</button>
+    <button class="tab" data-tab="watched">Watched</button>
+    <button class="tab settings-tab" data-tab="settings">⚙ Settings</button>
+  </nav>
+
+  <main>
+    <div id="browse-view">
+      <p id="status"></p>
+      <div id="movies" class="movie-grid"></div>
+    </div>
+    <div id="downloads-view" class="hidden">
+      <p id="downloads-count" class="tab-count"></p>
+      <div id="downloads-list" class="downloads-grid"></div>
+      <p id="downloads-empty" class="downloads-empty hidden">No active downloads yet. Click a movie to start streaming.</p>
+    </div>
+    <div id="watchlater-view" class="hidden">
+      <p id="watchlater-count" class="tab-count"></p>
+      <div id="watchlater-list" class="movie-grid suggestions"></div>
+      <p id="watchlater-empty" class="downloads-empty hidden">No movies in Watch Later.</p>
+    </div>
+    <div id="settings-view" class="hidden">
+      <div class="settings-form">
+        <h2 class="settings-title">API Settings</h2>
+        <p class="settings-desc">Keys are stored locally on the server and never exposed to the browser.</p>
+        <div class="settings-group">
+          <label>TMDB Read Access Token</label>
+          <div class="settings-input-wrap">
+            <input type="password" id="setting-tmdb-token" autocomplete="off" placeholder="Enter new value…" />
+            <button class="settings-eye-btn" data-target="setting-tmdb-token">Show</button>
+          </div>
+          <span class="settings-status" id="status-tmdb-token"></span>
+        </div>
+        <div class="settings-group">
+          <label>TMDB API Key</label>
+          <div class="settings-input-wrap">
+            <input type="password" id="setting-tmdb-key" autocomplete="off" placeholder="Enter new value…" />
+            <button class="settings-eye-btn" data-target="setting-tmdb-key">Show</button>
+          </div>
+          <span class="settings-status" id="status-tmdb-key"></span>
+        </div>
+        <div class="settings-group">
+          <label>OpenRouter API Key</label>
+          <div class="settings-input-wrap">
+            <input type="password" id="setting-openrouter-key" autocomplete="off" placeholder="Enter new value…" />
+            <button class="settings-eye-btn" data-target="setting-openrouter-key">Show</button>
+          </div>
+          <span class="settings-status" id="status-openrouter-key"></span>
+        </div>
+        <div class="settings-group">
+          <label>OpenRouter Model</label>
+          <input type="text" id="setting-openrouter-model" autocomplete="off" placeholder="anthropic/claude-sonnet-4-6" />
+        </div>
+        <button id="settings-save-btn" class="settings-save-btn">Save Settings</button>
+        <p id="settings-save-msg" class="settings-save-msg hidden"></p>
+      </div>
+    </div>
+    <div id="watched-view" class="hidden">
+      <div class="sort-controls">
+        <span class="sort-label">Sort:</span>
+        <button class="sort-btn active" data-sort="recent">Recent</button>
+        <button class="sort-btn" data-sort="title">A–Z</button>
+        <button class="sort-btn" data-sort="year">Year</button>
+        <button class="sort-btn" data-sort="rating">Rating</button>
+      </div>
+      <p id="watched-count" class="tab-count"></p>
+      <div id="watched-list" class="movie-grid"></div>
+      <p id="watched-empty" class="downloads-empty hidden">No watched movies yet.</p>
+    </div>
+  </main>
+
+  <!-- Quality picker modal -->
+  <div id="quality-modal" class="hidden">
+    <div class="quality-modal-backdrop" id="quality-modal-backdrop"></div>
+    <div class="quality-modal-box">
+      <div class="quality-modal-title" id="quality-modal-title">Choose Quality</div>
+      <div id="quality-options" class="quality-options"></div>
+      <button id="quality-cancel-btn" class="quality-cancel-btn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Player modal -->
+  <div id="player-modal" class="hidden">
+    <div id="modal-backdrop"></div>
+    <div class="modal-content">
+      <button id="close-btn" title="Close">✕</button>
+      <div class="modal-header">
+        <span id="modal-title"></span>
+        <span id="modal-meta"></span>
+      </div>
+      <video id="video-player" controls autoplay playsinline></video>
+      <div class="progress-wrap">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+      <div id="stats" class="stats">Connecting to peers…</div>
+    </div>
+  </div>
+
+  <!-- Info modal -->
+  <div id="info-modal" class="hidden">
+    <div class="info-modal-box">
+      <button id="info-close-btn" title="Close">✕</button>
+      <img id="info-poster" class="info-poster" src="" alt="" />
+      <div class="info-details">
+        <div id="info-title" class="info-title"></div>
+        <div id="info-meta" class="info-meta"></div>
+        <div id="info-extra" class="info-extra"></div>
+        <div id="info-plot" class="info-plot"></div>
+        <div class="info-actions">
+          <button id="info-watch-btn" class="info-watch-btn">▶ Watch Now</button>
+          <button id="info-watch-later-btn" class="info-watch-later-btn">⬇ Watch Later</button>
+          <button id="info-watched-btn" class="info-watched-btn">✓ Watched</button>
+        </div>
+      </div>
+      <div id="info-trailer-wrap" class="info-trailer-wrap">
+        <iframe id="info-trailer-frame" frameborder="0" allowfullscreen
+          allow="autoplay; encrypted-media"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Loading overlay -->
+  <div id="ai-loader" class="hidden">
+    <div class="ai-loader-content">
+      <div class="ai-loader-visual">
+        <div class="ai-ring ai-ring-1"></div>
+        <div class="ai-ring ai-ring-2"></div>
+        <div class="ai-ring ai-ring-3"></div>
+        <div class="ai-ring ai-ring-4"></div>
+        <div class="ai-orb" id="ai-orb">&#127916;</div>
+      </div>
+      <div class="ai-phase-tag">CURRENT PHASE</div>
+      <div id="ai-phase-text">Initializing&hellip;</div>
+      <div id="ai-phase-detail"></div>
+      <div class="ai-ticker-wrap"><span id="ai-ticker"></span></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
