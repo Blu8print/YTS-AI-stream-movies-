@@ -85,6 +85,38 @@
           <label>OpenRouter Model</label>
           <input type="text" id="setting-openrouter-model" autocomplete="off" placeholder="anthropic/claude-sonnet-4-6" />
         </div>
+        <div class="settings-group">
+          <label>Subdl API Key</label>
+          <div class="settings-input-wrap">
+            <input type="password" id="setting-subdl-key" autocomplete="off" placeholder="Enter new value…" />
+            <button class="settings-eye-btn" data-target="setting-subdl-key">Show</button>
+          </div>
+          <span class="settings-status" id="status-subdl-key"></span>
+        </div>
+        <div class="settings-group">
+          <label>Subtitle Languages</label>
+          <div class="settings-lang-grid" id="subtitle-languages">
+            <label class="lang-checkbox"><input type="checkbox" value="en" /> English</label>
+            <label class="lang-checkbox"><input type="checkbox" value="nl" /> Dutch</label>
+            <label class="lang-checkbox"><input type="checkbox" value="de" /> German</label>
+            <label class="lang-checkbox"><input type="checkbox" value="fr" /> French</label>
+            <label class="lang-checkbox"><input type="checkbox" value="es" /> Spanish</label>
+            <label class="lang-checkbox"><input type="checkbox" value="it" /> Italian</label>
+            <label class="lang-checkbox"><input type="checkbox" value="pt" /> Portuguese</label>
+            <label class="lang-checkbox"><input type="checkbox" value="ru" /> Russian</label>
+            <label class="lang-checkbox"><input type="checkbox" value="ja" /> Japanese</label>
+            <label class="lang-checkbox"><input type="checkbox" value="ko" /> Korean</label>
+            <label class="lang-checkbox"><input type="checkbox" value="zh" /> Chinese</label>
+            <label class="lang-checkbox"><input type="checkbox" value="ar" /> Arabic</label>
+            <label class="lang-checkbox"><input type="checkbox" value="tr" /> Turkish</label>
+            <label class="lang-checkbox"><input type="checkbox" value="pl" /> Polish</label>
+            <label class="lang-checkbox"><input type="checkbox" value="sv" /> Swedish</label>
+          </div>
+        </div>
+        <div class="settings-group">
+          <label>Download Folder</label>
+          <input type="text" id="setting-download-path" autocomplete="off" placeholder="./downloads" />
+        </div>
         <button id="settings-save-btn" class="settings-save-btn">Save Settings</button>
         <p id="settings-save-msg" class="settings-save-msg hidden"></p>
       </div>
@@ -121,6 +153,10 @@
       <div class="modal-header">
         <span id="modal-title"></span>
         <span id="modal-meta"></span>
+        <div class="subtitle-ctrl">
+          <button id="subtitle-btn" class="subtitle-btn" title="Subtitles">CC</button>
+          <div id="subtitle-dropdown" class="subtitle-dropdown hidden"></div>
+        </div>
       </div>
       <video id="video-player" controls autoplay playsinline></video>
       <div class="progress-wrap">

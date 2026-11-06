@@ -1,6 +1,18 @@
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
+const LANG_NAMES = {
+  en: 'English', nl: 'Dutch', de: 'German', fr: 'French', es: 'Spanish',
+  it: 'Italian', pt: 'Portuguese', ru: 'Russian', ja: 'Japanese', ko: 'Korean',
+  zh: 'Chinese', ar: 'Arabic', tr: 'Turkish', pl: 'Polish', sv: 'Swedish',
+};
+
+let currentPlayerImdbId  = null;
+let currentPlayerTitle   = null;
+let cachedSubtitleLangs  = ['en'];
+let resumeKey            = null;
+let lastSavedTime        = -1;
+
 function setStatus(msg, type = '') {
   const el = $('status');
   el.textContent = msg;
@@ -189,15 +201,7 @@ function renderDownloadCard(dl) {
 
   const watchBtn = card.querySelector('.dl-watch-btn');
   if (watchBtn) {
-    watchBtn.addEventListener('click', () => {
-      $('video-player').src = `/api/stream/${dl.infoHash}`;
-      $('modal-title').textContent = dl.name;
-      $('modal-meta').textContent = dl.done ? 'Complete' : `${pct}%`;
-      $('progress-bar').style.width = `${pct}%`;
-      $('stats').textContent = statusText;
-      $('player-modal').classList.remove('hidden');
-      $('video-player').play().catch(() => {});
-    });
+    watchBtn.addEventListener('click', () => openFromDownload(dl));
   }
 
   const pauseBtn = card.querySelector('.dl-pause-btn');
@@ -752,13 +756,37 @@ function closeInfoModal() {
 // ── Player ────────────────────────────────────────────────────────────────────
 let progressInterval = null;
 
+async function initSubtitles() {
+  try {
+    const s = await fetch('/api/settings').then(r => r.json());
+    cachedSubtitleLangs = (s.SUBTITLE_LANGUAGES || 'en').split(',').map(l => l.trim()).filter(Boolean);
+  } catch (_) {}
+  // If no imdb_id but we have a title, try looking it up via /api/movie
+  if (!currentPlayerImdbId && currentPlayerTitle) {
+    try {
+      const q  = currentPlayerTitle.replace(/\s*[\[(].*$/, '').trim();
+      const yr = (currentPlayerTitle.match(/\((\d{4})\)/) || [])[1];
+      const mv = await fetch(`/api/movie?title=${encodeURIComponent(q)}${yr ? `&year=${yr}` : ''}`).then(r => r.json());
+      if (mv?.imdb_id) currentPlayerImdbId = mv.imdb_id;
+    } catch (_) {}
+  }
+  buildSubtitleMenu();
+  if (currentPlayerImdbId) setSubtitleLang(cachedSubtitleLangs[0] || 'en');
+  $('subtitle-btn').classList.remove('hidden');
+}
+
 async function openPlayer(movie, torrent, suggestion) {
+  currentPlayerImdbId  = movie.imdb_id || null;
+  currentPlayerTitle   = `${movie.title} (${movie.year})`;
+  resumeKey = movie.imdb_id || null; // updated after infoHash known
+  lastSavedTime = -1;
   $('modal-title').textContent = `${movie.title} (${movie.year})`;
   $('modal-meta').textContent = `${torrent.quality} · ${torrent.video_codec} · ${torrent.size}`;
   $('progress-bar').style.width = '0%';
   $('stats').textContent = 'Starting download…';
   $('video-player').src = '';
   $('player-modal').classList.remove('hidden');
+  await initSubtitles();
 
   const s = suggestion || {};
   let infoHash;
@@ -773,11 +801,13 @@ async function openPlayer(movie, torrent, suggestion) {
         plot: movie.overview || s.plot || null,
         director: s.director || null,
         actors: s.actors || [],
+        imdb_id: movie.imdb_id || null,
       }),
     });
     const data = await r.json();
     if (data.error) throw new Error(data.error);
     infoHash = data.infoHash;
+    resumeKey = movie.imdb_id || infoHash;
   } catch (err) {
     $('stats').textContent = `Failed to start: ${err.message}`;
     return;
@@ -814,13 +844,89 @@ async function openPlayer(movie, torrent, suggestion) {
   }, 1000);
 }
 
+async function openFromDownload(dl) {
+  currentPlayerImdbId  = dl.imdb_id || null;
+  currentPlayerTitle   = dl.name || null;
+  resumeKey = dl.imdb_id || dl.infoHash;
+  lastSavedTime = -1;
+  const pct = (dl.progress * 100).toFixed(1);
+  $('modal-title').textContent = dl.name;
+  $('modal-meta').textContent = dl.done ? 'Complete' : `${pct}%`;
+  $('progress-bar').style.width = `${pct}%`;
+  $('stats').textContent = dl.done ? 'Complete' : `${pct}% · ${fmtSpeed(dl.downloadSpeed)} · ${dl.numPeers} peers`;
+  $('video-player').src = `/api/stream/${dl.infoHash}`;
+  $('player-modal').classList.remove('hidden');
+  $('video-player').play().catch(() => {});
+  await initSubtitles();
+}
+
 function closePlayer() {
   $('player-modal').classList.add('hidden');
   clearInterval(progressInterval);
   const v = $('video-player');
   v.pause();
   v.src = '';
+  v.querySelectorAll('track').forEach(t => t.remove());
+  $('subtitle-dropdown').classList.add('hidden');
+  currentPlayerImdbId = null;
+  currentPlayerTitle  = null;
+  resumeKey = null;
+  lastSavedTime = -1;
 }
+
+// ── Subtitles ──────────────────────────────────────────────────────────────────
+function buildSubtitleMenu() {
+  const dd = $('subtitle-dropdown');
+  dd.innerHTML = '';
+  const off = document.createElement('div');
+  off.className = 'subtitle-option';
+  off.textContent = 'Off';
+  off.dataset.lang = 'off';
+  off.addEventListener('click', () => { setSubtitleLang('off'); dd.classList.add('hidden'); });
+  dd.appendChild(off);
+  for (const lang of cachedSubtitleLangs) {
+    const opt = document.createElement('div');
+    opt.className = 'subtitle-option';
+    opt.textContent = LANG_NAMES[lang] || lang.toUpperCase();
+    opt.dataset.lang = lang;
+    opt.addEventListener('click', () => { setSubtitleLang(lang); dd.classList.add('hidden'); });
+    dd.appendChild(opt);
+  }
+}
+
+function setSubtitleLang(lang) {
+  const video = $('video-player');
+  video.querySelectorAll('track').forEach(t => t.remove());
+  document.querySelectorAll('.subtitle-option').forEach(o => {
+    o.classList.toggle('active', o.dataset.lang === lang);
+  });
+  if (lang === 'off' || !currentPlayerImdbId) return;
+  const track = document.createElement('track');
+  track.kind = 'subtitles';
+  track.label = LANG_NAMES[lang] || lang;
+  track.srclang = lang;
+  video.appendChild(track);
+  // Set src after appending so the load event fires reliably
+  track.src = `/api/subtitles?imdb_id=${encodeURIComponent(currentPlayerImdbId)}&lang=${encodeURIComponent(lang)}`;
+  // Browsers won't fetch a track in 'disabled' mode — force it to load
+  const tt = video.textTracks[video.textTracks.length - 1];
+  if (tt) tt.mode = 'showing';
+  // Also set on load in case mode resets
+  track.addEventListener('load', () => {
+    const textTrack = video.textTracks[video.textTracks.length - 1];
+    if (textTrack) textTrack.mode = 'showing';
+  });
+}
+
+$('subtitle-btn').addEventListener('click', e => {
+  e.stopPropagation();
+  const dd = $('subtitle-dropdown');
+  const rect = e.currentTarget.getBoundingClientRect();
+  dd.style.top   = (rect.bottom + 6) + 'px';
+  dd.style.right = (window.innerWidth - rect.right) + 'px';
+  dd.classList.toggle('hidden');
+});
+document.addEventListener('click', () => $('subtitle-dropdown').classList.add('hidden'));
 
 // ── Event listeners ───────────────────────────────────────────────────────────
 $('info-close-btn').addEventListener('click', closeInfoModal);
@@ -971,6 +1077,8 @@ async function loadSettings() {
     $('setting-tmdb-key').value = '';
     $('setting-openrouter-key').value = '';
     $('setting-openrouter-model').value = s.OPENROUTER_MODEL || '';
+    $('setting-subdl-key').value = '';
+    $('setting-download-path').value = s.DOWNLOAD_PATH || './downloads';
 
     $('status-tmdb-token').textContent   = s.TMDB_READ_ACCESS_TOKEN ? '✓ Set' : 'Not set';
     $('status-tmdb-token').className     = 'settings-status ' + (s.TMDB_READ_ACCESS_TOKEN ? 'set' : 'unset');
@@ -978,21 +1086,37 @@ async function loadSettings() {
     $('status-tmdb-key').className       = 'settings-status ' + (s.TMDB_API_KEY ? 'set' : 'unset');
     $('status-openrouter-key').textContent = s.OPENROUTER_API_KEY ? '✓ Set' : 'Not set';
     $('status-openrouter-key').className   = 'settings-status ' + (s.OPENROUTER_API_KEY ? 'set' : 'unset');
+    $('status-subdl-key').textContent    = s.SUBDL_API_KEY ? '✓ Set' : 'Not set';
+    $('status-subdl-key').className      = 'settings-status ' + (s.SUBDL_API_KEY ? 'set' : 'unset');
+
+    const activeLangs = new Set((s.SUBTITLE_LANGUAGES || 'en').split(',').map(l => l.trim()));
+    document.querySelectorAll('#subtitle-languages input[type="checkbox"]').forEach(cb => {
+      cb.checked = activeLangs.has(cb.value);
+    });
   } catch (_) {}
 }
 
 $('settings-save-btn').addEventListener('click', async () => {
   const payload = {};
-  const tmdbToken = $('setting-tmdb-token').value.trim();
-  const tmdbKey   = $('setting-tmdb-key').value.trim();
-  const orKey     = $('setting-openrouter-key').value.trim();
-  const orModel   = $('setting-openrouter-model').value.trim();
+  const tmdbToken   = $('setting-tmdb-token').value.trim();
+  const tmdbKey     = $('setting-tmdb-key').value.trim();
+  const orKey       = $('setting-openrouter-key').value.trim();
+  const orModel     = $('setting-openrouter-model').value.trim();
+  const subdlKey    = $('setting-subdl-key').value.trim();
+  const dlPath      = $('setting-download-path').value.trim();
+  const checkedLangs = [...document.querySelectorAll('#subtitle-languages input[type="checkbox"]:checked')].map(cb => cb.value).join(',');
+
   if (tmdbToken) payload.TMDB_READ_ACCESS_TOKEN = tmdbToken;
   if (tmdbKey)   payload.TMDB_API_KEY           = tmdbKey;
   if (orKey)     payload.OPENROUTER_API_KEY      = orKey;
   if (orModel)   payload.OPENROUTER_MODEL        = orModel;
+  if (subdlKey)  payload.SUBDL_API_KEY           = subdlKey;
+  if (dlPath)    payload.DOWNLOAD_PATH           = dlPath;
+  payload.SUBTITLE_LANGUAGES = checkedLangs || 'en';
 
-  if (!Object.keys(payload).length) {
+  // SUBTITLE_LANGUAGES is always set, so only block if nothing else changed and no keys entered
+  const keysEntered = tmdbToken || tmdbKey || orKey || orModel || subdlKey || dlPath || checkedLangs;
+  if (!keysEntered) {
     showSettingsMsg('Nothing to save — fill in at least one field.', false);
     return;
   }
@@ -1059,6 +1183,33 @@ $('video-player').addEventListener('pause', () => {
 });
 $('video-player').addEventListener('ended', () => {
   if (_updatePending) { showUpdateToast(_updatePending.version, _updatePending.url); _updatePending = null; }
+  if (resumeKey) {
+    fetch(`/api/resume/${encodeURIComponent(resumeKey)}`, { method: 'DELETE' }).catch(() => {});
+    resumeKey = null;
+  }
+});
+
+// ── Resume save / restore ─────────────────────────────────────────────────────
+$('video-player').addEventListener('loadedmetadata', async () => {
+  if (!resumeKey) return;
+  try {
+    const r = await fetch(`/api/resume/${encodeURIComponent(resumeKey)}`).then(x => x.json());
+    if (r.position > 10) $('video-player').currentTime = r.position;
+  } catch (_) {}
+});
+
+$('video-player').addEventListener('timeupdate', () => {
+  const video = $('video-player');
+  if (!resumeKey || !video.duration) return;
+  const t = Math.floor(video.currentTime);
+  if (t > 0 && t !== lastSavedTime && t % 10 === 0) {
+    lastSavedTime = t;
+    fetch('/api/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: resumeKey, position: video.currentTime }),
+    }).catch(() => {});
+  }
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────

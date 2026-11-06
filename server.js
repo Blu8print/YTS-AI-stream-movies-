@@ -3,6 +3,7 @@ const express = require('express');
 const WebTorrent = require('webtorrent');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const { checkForUpdate, getUpdateInfo } = require('./updater');
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
@@ -31,8 +32,11 @@ function buildMagnet(hash, title) {
   return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(title)}${trackerStr}`;
 }
 
-// Ensure downloads dir exists
-if (!fs.existsSync('./downloads')) fs.mkdirSync('./downloads');
+function getDownloadPath() {
+  const p = getConfig('DOWNLOAD_PATH') || './downloads';
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+  return p;
+}
 
 const DATA_DIR = './data';
 const WATCHLIST_FILE = path.join(DATA_DIR, 'watchlist.json');
@@ -61,6 +65,15 @@ function saveWatchlist(wl) { fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(wl,
 const DOWNLOADS_FILE = path.join(DATA_DIR, 'downloads.json');
 if (!fs.existsSync(DOWNLOADS_FILE)) fs.writeFileSync(DOWNLOADS_FILE, '{}');
 
+const RESUME_FILE = path.join(DATA_DIR, 'resume.json');
+if (!fs.existsSync(RESUME_FILE)) fs.writeFileSync(RESUME_FILE, '{}');
+
+function readResume() {
+  try { return JSON.parse(fs.readFileSync(RESUME_FILE, 'utf8')); }
+  catch (_) { return {}; }
+}
+function saveResume(r) { fs.writeFileSync(RESUME_FILE, JSON.stringify(r, null, 2)); }
+
 function readDownloadsMeta() {
   try { return JSON.parse(fs.readFileSync(DOWNLOADS_FILE, 'utf8')); }
   catch (_) { return {}; }
@@ -71,7 +84,7 @@ function saveDownloadsMeta(meta) { fs.writeFileSync(DOWNLOADS_FILE, JSON.stringi
 const savedDownloads = readDownloadsMeta();
 for (const [key, info] of Object.entries(savedDownloads)) {
   const magnet = buildMagnet(info.hash, info.title || info.hash);
-  const torrent = wtClient.add(magnet, { path: './downloads' });
+  const torrent = wtClient.add(magnet, { path: getDownloadPath() });
   activeTorrents.set(key, torrent);
   torrent.on('error', err => console.error(`Torrent error [${key}]:`, err.message));
   torrent.on('metadata', () => console.log(`Resumed: ${torrent.name}`));
@@ -154,6 +167,7 @@ app.get('/api/downloads', (_req, res) => {
       plot:          m.plot || null,
       director:      m.director || null,
       actors:        m.actors || [],
+      imdb_id:       m.imdb_id || null,
     });
   }
   res.json(result);
@@ -264,20 +278,20 @@ app.get('/api/movie', async (req, res) => {
 
 // ── Start torrent download ────────────────────────────────────────────────────
 app.post('/api/download', (req, res) => {
-  const { hash, title, poster, plot, director, actors } = req.body;
+  const { hash, title, poster, plot, director, actors, imdb_id } = req.body;
   if (!hash) return res.status(400).json({ error: 'hash required' });
 
   const key = hash.toLowerCase();
 
   if (!activeTorrents.has(key)) {
     const magnet = buildMagnet(hash, title || hash);
-    const torrent = wtClient.add(magnet, { path: './downloads' });
+    const torrent = wtClient.add(magnet, { path: getDownloadPath() });
     activeTorrents.set(key, torrent);
     torrent.on('error', err => console.error(`Torrent error [${key}]:`, err.message));
     torrent.on('metadata', () => console.log(`Metadata: ${torrent.name} (${torrent.files.length} files)`));
 
     const meta = readDownloadsMeta();
-    meta[key] = { hash, title, poster: poster || null, plot: plot || null, director: director || null, actors: actors || [] };
+    meta[key] = { hash, title, poster: poster || null, plot: plot || null, director: director || null, actors: actors || [], imdb_id: imdb_id || null };
     saveDownloadsMeta(meta);
   }
 
@@ -419,6 +433,124 @@ app.delete('/api/watchlist/later/:imdbId', (req, res) => {
 // ── Update info ───────────────────────────────────────────────────────────────
 app.get('/api/update-info', (_req, res) => res.json(getUpdateInfo()));
 
+// ── Resume ────────────────────────────────────────────────────────────────────
+app.get('/api/resume/:key', (req, res) => {
+  const r = readResume();
+  res.json({ position: r[req.params.key] || 0 });
+});
+
+app.post('/api/resume', (req, res) => {
+  const { key, position } = req.body;
+  if (!key) return res.status(400).json({ error: 'key required' });
+  const r = readResume();
+  r[key] = position;
+  saveResume(r);
+  res.json({ ok: true });
+});
+
+app.delete('/api/resume/:key', (req, res) => {
+  const r = readResume();
+  delete r[req.params.key];
+  saveResume(r);
+  res.json({ ok: true });
+});
+
+// ── Subtitle helpers ──────────────────────────────────────────────────────────
+function extractSrtFromZip(buf) {
+  // Find End of Central Directory record
+  let eocdOffset = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocdOffset = i; break; }
+  }
+  if (eocdOffset < 0) return null;
+
+  const cdEntries = buf.readUInt16LE(eocdOffset + 10);
+  const cdOffset  = buf.readUInt32LE(eocdOffset + 16);
+
+  let offset = cdOffset;
+  for (let i = 0; i < cdEntries; i++) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) break;
+    const method       = buf.readUInt16LE(offset + 10);
+    const compSize     = buf.readUInt32LE(offset + 20);
+    const fnLen        = buf.readUInt16LE(offset + 28);
+    const extraLen     = buf.readUInt16LE(offset + 30);
+    const commentLen   = buf.readUInt16LE(offset + 32);
+    const localHdrOff  = buf.readUInt32LE(offset + 42);
+    const fileName     = buf.slice(offset + 46, offset + 46 + fnLen).toString('utf8');
+
+    if (fileName.toLowerCase().endsWith('.srt')) {
+      const localFnLen    = buf.readUInt16LE(localHdrOff + 26);
+      const localExtraLen = buf.readUInt16LE(localHdrOff + 28);
+      const dataStart     = localHdrOff + 30 + localFnLen + localExtraLen;
+      const compData      = buf.slice(dataStart, dataStart + compSize);
+      if (method === 0) return compData.toString('utf8');
+      if (method === 8) {
+        try { return zlib.inflateRawSync(compData).toString('utf8'); } catch (_) {}
+      }
+    }
+    offset += 46 + fnLen + extraLen + commentLen;
+  }
+  return null;
+}
+
+function srtToVtt(srt) {
+  let vtt = 'WEBVTT\n\n';
+  const lines = srt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    while (i < lines.length && lines[i].trim() === '') i++;
+    if (i >= lines.length) break;
+    if (/^\d+$/.test(lines[i].trim())) i++; // skip cue number
+    if (i >= lines.length) break;
+    if (lines[i].includes('-->')) {
+      vtt += lines[i].replace(/,(\d{3})/g, '.$1') + '\n';
+      i++;
+      while (i < lines.length && lines[i].trim() !== '') {
+        vtt += lines[i] + '\n';
+        i++;
+      }
+      vtt += '\n';
+    } else {
+      i++;
+    }
+  }
+  return vtt;
+}
+
+// ── Subtitles (Subdl) ─────────────────────────────────────────────────────────
+app.get('/api/subtitles', async (req, res) => {
+  const { imdb_id, lang } = req.query;
+  if (!imdb_id) return res.status(400).json({ error: 'imdb_id required' });
+
+  const apiKey = getConfig('SUBDL_API_KEY');
+  if (!apiKey) return res.status(503).json({ error: 'SUBDL_API_KEY not set' });
+
+  const language = (lang || 'en').toUpperCase();
+  try {
+    const searchRes = await fetch(
+      `https://api.subdl.com/api/v1/subtitles?api_key=${apiKey}&imdb_id=${encodeURIComponent(imdb_id)}&languages=${language}&subs_per_page=5`
+    );
+    const searchData = await searchRes.json();
+    if (!searchData.status || !searchData.subtitles?.length) {
+      return res.status(404).json({ error: 'No subtitles found' });
+    }
+
+    const sub    = searchData.subtitles[0];
+    const zipUrl = `https://dl.subdl.com${sub.url}`;
+    const zipRes = await fetch(zipUrl);
+    const zipBuf = Buffer.from(await zipRes.arrayBuffer());
+
+    const srt = extractSrtFromZip(zipBuf);
+    if (!srt) return res.status(404).json({ error: 'No SRT in archive' });
+
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.send(srtToVtt(srt));
+  } catch (err) {
+    console.error('Subtitles error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 app.get('/api/settings', (_req, res) => {
   const s = readSettings();
@@ -429,12 +561,15 @@ app.get('/api/settings', (_req, res) => {
     TMDB_API_KEY:           mask('TMDB_API_KEY'),
     OPENROUTER_API_KEY:     mask('OPENROUTER_API_KEY'),
     OPENROUTER_MODEL:       s['OPENROUTER_MODEL'] || env['OPENROUTER_MODEL'] || 'anthropic/claude-sonnet-4-6',
+    SUBDL_API_KEY:          mask('SUBDL_API_KEY'),
+    SUBTITLE_LANGUAGES:     s['SUBTITLE_LANGUAGES'] || env['SUBTITLE_LANGUAGES'] || 'en',
+    DOWNLOAD_PATH:          s['DOWNLOAD_PATH'] || env['DOWNLOAD_PATH'] || './downloads',
   });
 });
 
 app.post('/api/settings', (req, res) => {
   const s = readSettings();
-  const allowed = ['TMDB_READ_ACCESS_TOKEN', 'TMDB_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL'];
+  const allowed = ['TMDB_READ_ACCESS_TOKEN', 'TMDB_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL', 'SUBDL_API_KEY', 'SUBTITLE_LANGUAGES', 'DOWNLOAD_PATH'];
   for (const key of allowed) {
     if (req.body[key] !== undefined && req.body[key] !== '') {
       s[key] = req.body[key];
