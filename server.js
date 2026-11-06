@@ -3,6 +3,7 @@ const express = require('express');
 const WebTorrent = require('webtorrent');
 const path = require('path');
 const fs = require('fs');
+const { checkForUpdate, getUpdateInfo } = require('./updater');
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 const TMDB_IMG  = 'https://image.tmdb.org/t/p';
@@ -77,7 +78,7 @@ for (const [key, info] of Object.entries(savedDownloads)) {
 }
 
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Latest movies (no cam/ts, rating > 5.5, TMDb posters) ────────────────────
 app.get('/api/latest', async (req, res) => {
@@ -415,6 +416,9 @@ app.delete('/api/watchlist/later/:imdbId', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Update info ───────────────────────────────────────────────────────────────
+app.get('/api/update-info', (_req, res) => res.json(getUpdateInfo()));
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 app.get('/api/settings', (_req, res) => {
   const s = readSettings();
@@ -444,4 +448,6 @@ app.post('/api/settings', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`YTS AI Player → http://localhost:${PORT}`);
+  checkForUpdate();
+  setInterval(checkForUpdate, 24 * 60 * 60 * 1000);
 });

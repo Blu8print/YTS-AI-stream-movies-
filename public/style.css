@@ -1336,3 +1336,39 @@ main {
 
 .settings-save-msg.ok  { color: #4caf50; }
 .settings-save-msg.err { color: #e50914; }
+
+/* ── Update toast ─────────────────────────────────────────────── */
+.update-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 50;
+  background: var(--surface);
+  border: 1px solid var(--gold);
+  color: var(--text);
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  animation: toast-in 0.25s ease;
+}
+.update-toast.hidden { display: none; }
+.update-toast a { color: var(--gold); text-decoration: underline; }
+.update-toast a:hover { color: var(--gold-hover); }
+#update-toast-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+#update-toast-close:hover { color: var(--text); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

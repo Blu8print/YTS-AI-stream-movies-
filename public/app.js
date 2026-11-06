@@ -1027,6 +1027,42 @@ document.querySelectorAll('.settings-eye-btn').forEach(btn => {
   });
 });
 
+// ── Update toast ──────────────────────────────────────────────────────────────
+let _updatePending = null;
+
+function showUpdateToast(version, url) {
+  const playerVisible = !$('player-modal').classList.contains('hidden');
+  const video = $('video-player');
+  const isPlaying = playerVisible && !video.paused && !video.ended;
+
+  if (isPlaying) {
+    _updatePending = { version, url };
+    return;
+  }
+
+  const toast = $('update-toast');
+  toast.innerHTML = `Update available: ${version} &mdash; <a href="${url}" target="_blank" rel="noopener">Download</a> <button id="update-toast-close">✕</button>`;
+  toast.classList.remove('hidden');
+  $('update-toast-close').addEventListener('click', () => toast.classList.add('hidden'));
+}
+
+async function checkForUpdate() {
+  try {
+    const info = await fetch('/api/update-info').then(r => r.json());
+    if (info.available) showUpdateToast(info.version, info.url);
+  } catch (_) {}
+}
+
+// Show queued update toast when video pauses or ends
+$('video-player').addEventListener('pause', () => {
+  if (_updatePending) { showUpdateToast(_updatePending.version, _updatePending.url); _updatePending = null; }
+});
+$('video-player').addEventListener('ended', () => {
+  if (_updatePending) { showUpdateToast(_updatePending.version, _updatePending.url); _updatePending = null; }
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadWatchlist();
 loadLatest();
+checkForUpdate();
+setInterval(checkForUpdate, 24 * 60 * 60 * 1000);
